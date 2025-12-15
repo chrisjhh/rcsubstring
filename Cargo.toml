@@ -1,11 +1,12 @@
 [package]
 name = "rcsubstring"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 authors = ["Chris Hamer-Hodges <chris.hhodges@gmail.com>"]
 license = "Apache-2.0 OR MIT"
 keywords = ["refcount", "rc_string", "substring"]
 description = "A simple lightweigt reference-counted substring of an Rc<String>."
 repository = "https://github.com/chrisjhh/rcsubstring"
+readme = "README.md"
 
 [dependencies]
