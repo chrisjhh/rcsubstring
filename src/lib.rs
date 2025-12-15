@@ -2,8 +2,10 @@
 A reference-counted substring
 
 For returning part of a string held in an [Rc] that needs to live longer than the source of the string itself.
-For a more complete alternative see [ArcStr](https://crates.io/crates/arcstr). This is intended as a lightweight alternative where the
-string is held in an [Rc] rather than an [Arc][std::sync::Arc] and in simple single-threaded situations.
+For more complete alternatives see [arcstr](https://crates.io/crates/arcstr) or [slice-rc](https://crates.io/crates/slice-rc).
+This is intended as a simple lightweight alternative where you just want a reference counted substring in single-threaded situations.
+
+It implements both `Deref` and `AsRef` so can be used just as a `str` in most contexts.
 
 # Example
 ```rust
@@ -14,8 +16,61 @@ let shared_substring = RcSubstring::new(Rc::clone(&shared_text), 5..9);
 drop(shared_text);
 assert_eq!(shared_substring, "text");
 ```
+
+# Use Case
+For an intended use case, consider a function that generates text and then returns an iterator over that text.
+How do we get the lifetimes to work? Even if we pass the ownership of the generated text to the iterator the
+iterator will not be allowed to pass back refs to the text it holds as it is a requirement that the values
+returned by `next()` can outlive the iterator. This is simple crate that offeres a simple solution.
+
+```rust
+# use rcsubstring::RcSubstring;
+# use std::rc::Rc;
+struct WordIterator {
+    rcstring: Rc<String>,
+    start_pos: usize,
+}
+impl Iterator for WordIterator {
+    type Item = RcSubstring;
+    fn next(&mut self) -> Option<Self::Item> {
+        let pos = self.start_pos + self.rcstring[self.start_pos..].find(" ")?;
+        let value = RcSubstring::new(Rc::clone(&self.rcstring), self.start_pos..pos);
+        self.start_pos = pos + 1;
+        return Some(value);
+    }
+}
+
+fn generate_text(values: Vec<usize>) -> String {
+    let words = vec!["zero", "one", "two", "three", "four", "five"];
+    let mut result = String::new();
+    for i in values {
+        result.push_str(words[i]);
+        result.push_str(" ");
+    }
+    result
+}
+
+fn give_me_an_iterator() -> WordIterator {
+    let text = generate_text(vec![2, 3, 1, 0, 5]);
+    WordIterator {
+        rcstring: Rc::new(text),
+        start_pos: 0,
+    }
+}
+
+let mut it = give_me_an_iterator();
+assert_eq!(it.next().unwrap(), "two");
+assert_eq!(it.next().unwrap(), "three");
+assert_eq!(it.next().unwrap(), "one");
+assert_eq!(it.next().unwrap(), "zero");
+let value = it.next().unwrap();
+drop(it);
+assert_eq!(value, "five");
+```
+
 */
 #![warn(missing_docs)]
+use std::convert::AsRef;
 use std::fmt::{Debug, Display};
 use std::ops::{Deref, Range};
 use std::rc::Rc;
@@ -48,13 +103,12 @@ impl PartialEq<&str> for RcSubstring {
     }
 }
 
-#[allow(dead_code)]
 impl RcSubstring {
     /// Construct a new RcSubstring
     ///
     /// Takes the `Rc<String>` to wrap and the range for the substring in this text
     ///
-    /// # Panics
+    /// # Panics (in debug)
     ///
     /// Panics if `range` is invalid
     ///  - begin < end
@@ -62,19 +116,22 @@ impl RcSubstring {
     ///
     /// If it didn't panic here it would panic during the slice when the RcSubstring is used
     /// so it is better to catch the issues at source.
+    ///
+    /// These panics come from debug_assert! macros that are removed in release build
+    /// for efficiency. You will still get a panic when you try to get the slice.
     pub fn new(rcstring: Rc<String>, range: Range<usize>) -> Self {
-        assert!(
+        debug_assert!(
             range.end >= range.start,
             "begin < end ({} < {}) when creating RcSubstring",
             range.start,
             range.end
         );
-        assert!(
+        debug_assert!(
             range.start <= rcstring.len(),
             "start index {} out of bounds when creating RcSubstring",
             range.start
         );
-        assert!(
+        debug_assert!(
             range.end <= rcstring.len(),
             "end index {} out of bounds when creating RcSubstring",
             range.end
@@ -88,6 +145,16 @@ impl Deref for RcSubstring {
 
     fn deref(&self) -> &Self::Target {
         &self.rcstring[self.range.start..self.range.end]
+    }
+}
+
+impl<T> AsRef<T> for RcSubstring
+where
+    T: ?Sized,
+    <RcSubstring as Deref>::Target: AsRef<T>,
+{
+    fn as_ref(&self) -> &T {
+        self.deref().as_ref()
     }
 }
 
@@ -117,54 +184,21 @@ mod tests {
     }
 
     #[test]
-    fn test_intended_usage() {
-        struct WordIterator {
-            rcstring: Rc<String>,
-            start_pos: usize,
-        }
-        impl Iterator for WordIterator {
-            type Item = RcSubstring;
-            fn next(&mut self) -> Option<Self::Item> {
-                let pos = self.start_pos + self.rcstring[self.start_pos..].find(" ")?;
-                let value = RcSubstring::new(Rc::clone(&self.rcstring), self.start_pos..pos);
-                self.start_pos = pos + 1;
-                return Some(value);
-            }
-        }
-
-        fn generate_text(values: Vec<usize>) -> String {
-            let words = vec!["zero", "one", "two", "three", "four", "five"];
-            let mut result = String::new();
-            for i in values {
-                result.push_str(words[i]);
-                result.push_str(" ");
-            }
-            result
-        }
-
-        fn give_me_an_iterator() -> WordIterator {
-            let text = generate_text(vec![2, 3, 1, 0, 5]);
-            WordIterator {
-                rcstring: Rc::new(text),
-                start_pos: 0,
-            }
-        }
-
-        let mut it = give_me_an_iterator();
-        assert_eq!(it.next().unwrap(), "two");
-        assert_eq!(it.next().unwrap(), "three");
-        assert_eq!(it.next().unwrap(), "one");
-        assert_eq!(it.next().unwrap(), "zero");
-        let value = it.next().unwrap();
-        drop(it);
-        assert_eq!(value, "five");
-    }
-
-    #[test]
     fn test_empty() {
         let rcsubstring = RcSubstring::new(Rc::new(String::from("Random text")), 3..3);
         assert_eq!(rcsubstring.len(), 0);
         assert_eq!(rcsubstring, "");
+    }
+
+    #[test]
+    fn test_as_ref() {
+        fn is_hello<T: AsRef<str>>(s: T) {
+            assert_eq!(s.as_ref(), "hello");
+        }
+
+        let text = String::from("hello world!");
+        let rcss = RcSubstring::new(Rc::new(text), 0..5);
+        is_hello(rcss);
     }
 
     // Test these bad uses panic with our own message - ie. not in some other downstream code
