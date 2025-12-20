@@ -7,6 +7,8 @@ This is intended as a simple lightweight alternative where you just want a refer
 
 It implements both `Deref` and `AsRef` so can be used just as a `str` in most contexts.
 
+[CHANGELOG.md](CHANGELOG.md)
+
 # Example
 ```rust
 # use rcsubstring::RcSubstring;
